@@ -303,9 +303,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                         let newLayers = currentNeuralNetwork.Network |> Array.mapi (fun iter layer -> Layer(newWeights[iter], newBiases[iter], layer.BoundingFunction))
                         newLayers
                     NeuralNetwork(updatedHiddenLayers)
-                let endOfEpochNeuralNet =
-                    (initialNetwork, miniBatches)
-                    ||> Array.fold (updateOnBatch learningRate)
+                let endOfEpochNeuralNet = (currentNetwork, miniBatches) ||> Array.fold (updateOnBatch learningRate)
                 match testMode with
                 | Production -> completeAllEpochs testMode (currentCount+1) endOfEpochNeuralNet
                 | Test ->
@@ -397,7 +395,7 @@ module Main =
         //Backprop should have a matrix of the final layer being some arrangement of 0.056, 0.02358, -0.05536, and -0.0233116/
         //The next layer should include a delta value os -0.1617915 and a derivative of -0.0697166
 
-        let neuralNet = NeuralNetwork.createRandomizedNeuralNetwork initialLayerHeight [|16; 16; 10|] //This is made from the images
+        let neuralNet = NeuralNetwork.createRandomizedNeuralNetwork initialLayerHeight [|30; 10|] //This is made from the images
 
         //Performing some tests
         let newMatrix =
@@ -421,7 +419,7 @@ module Main =
                 |> Array.unzip
             let boundInputImages = inputImages |> Array.map (Array.map (fun x -> x / 255.0f))
             (boundInputImages, expectedOutputs) ||> Array.zip
-        NeuralNetwork.SGD boundTo1DatafiedImages 30 10 3.0f TestMode.Test neuralNet |> ignore
+        NeuralNetwork.SGD boundTo1DatafiedImages 30 20 1.0f TestMode.Test neuralNet |> ignore
 
         ignore ()
 
