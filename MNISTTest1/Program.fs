@@ -222,7 +222,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
         let (activations, finalState) = inputData |> NeuralNetwork.feedForward inputNetwork
         let finalArrayLength = Array.length finalState //Precalculated for performance reasons.
         if (finalArrayLength <> (Array.length expectedResult)) then raise (System.ArgumentException("Output and Expected Result lengths did not match during backpropagation."))
-        let errorFunction (inputResult : float32) (expectedResult : float32) = (expectedResult - inputResult)// ** 2.0f //Exponential is not necessary since this is the derivative.
+        let errorFunction (inputResult : float32) (expectedResult : float32) = -2.0f * (expectedResult - inputResult)// ** 2.0f //Exponential is not necessary since this is the derivative.
         let finalLayerError = (finalState, expectedResult) ||> Array.map2 errorFunction
         //Note that all activation functions we are using have derivatives that can be defined in terms of the original activation function, not just in terms of the variable which went into the activation function.
         //We will be using that so that we do not have to store the data on the inputs of the activation function.
@@ -245,7 +245,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                 let activationFunctionOfLayer = activationFunctionDerivativeToUseBasedOnActivatedNeuron neuralNetworkStructure.Network[currentLayer-1].BoundingFunction
                 let lastLayersActivations = (currentLayer) |> Array.get activationsOfAllLayers
                 let thisLayersActivations = (currentLayer - 1) |> Array.get activationsOfAllLayers
-                let preDeltaComputation2D = ArrayOperations.DotProduct2D (previousLayerDelta |> ArrayOperations.Turn1DArrayInto2DHorizontal) (neuralNetworkStructure.Network[currentLayer].Weights) //Dot multiply horizontal deltas from last layer by weight matrix (also from last last layer, because the weights and deltas mixed to become our new delta terms) to get horizontal preDeltas
+                let preDeltaComputation2D = ArrayOperations.DotProduct2D  (previousLayerDelta |> ArrayOperations.Turn1DArrayInto2DHorizontal) (neuralNetworkStructure.Network[currentLayer].Weights)  //Dot multiply horizontal deltas from last layer by weight matrix (also from last last layer, because the weights and deltas mixed to become our new delta terms) to get horizontal preDeltas
                 let preDeltaComputation = preDeltaComputation2D[0,*]
                 let deltaThisLayer = (preDeltaComputation, (lastLayersActivations |> Array.map activationFunctionOfLayer)) ||> Array.map2 (*) //Multiply that horizontal array piecewise with the derivatives of the activation function to get the new deltas.
                 let dCostWithRespectTodWeights = ArrayOperations.DotProduct2D (deltaThisLayer |> ArrayOperations.Turn1DArrayInto2DVertical) (thisLayersActivations |> ArrayOperations.Turn1DArrayInto2DHorizontal)
@@ -377,6 +377,26 @@ module Main =
             let height = firstImage.Data |> Array2D.length1
             width * height
 
+        let testPropNeuralNet =
+            let weights01vector = [|[|0.3f; 0.1f|];[|-0.4f;0.7f|]|]
+            let weights01 = Array2D.init 2 2 (fun row col -> weights01vector[row][col])
+            let biases1 = [|0.2f; -0.1f|]
+            let weights02vector = [|[|-0.9f; 0.7f|];[|0.2f;-0.3f|]|]
+            let weights02 = Array2D.init 2 2 (fun row col -> weights02vector[row][col])
+            let biases2 = [|0.8f;-0.5f|]
+            let layer1 = Layer(weights01, biases1, BoundingFunction.ReLu)
+            let layer2 = Layer(weights02, biases2, BoundingFunction.Sigmoid)
+            NeuralNetwork([|layer1; layer2|])
+
+        testPropNeuralNet.FeedForward([|0.4f;0.6f|])
+        |> ignore
+        //Steps should show in feed forward (0.4, 0.6) then (0.38, 0.16) then (0.63876, 0.3841429).
+
+        NeuralNetwork.backprop testPropNeuralNet [|0.4f; 0.6f|] [|0.0f; 1.0f|]
+        |> ignore
+        //Backprop should have a matrix of the final layer being some arrangement of 0.056, 0.02358, -0.05536, and -0.0233116/
+        //The next layer should include a delta value os -0.1617915 and a derivative of -0.0697166
+
         let neuralNet = NeuralNetwork.createRandomizedNeuralNetwork initialLayerHeight [|16; 16; 10|] //This is made from the images
 
         //Performing some tests
@@ -401,7 +421,7 @@ module Main =
                 |> Array.unzip
             let boundInputImages = inputImages |> Array.map (Array.map (fun x -> x / 255.0f))
             (boundInputImages, expectedOutputs) ||> Array.zip
-        NeuralNetwork.SGD boundTo1DatafiedImages 150 100 2.0f TestMode.Test neuralNet |> ignore
+        NeuralNetwork.SGD boundTo1DatafiedImages 30 10 3.0f TestMode.Test neuralNet |> ignore
 
         ignore ()
 
