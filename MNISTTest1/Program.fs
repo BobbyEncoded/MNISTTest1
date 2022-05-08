@@ -150,7 +150,7 @@ type Layer(weights : float32[,], biases : float32[], boundingFunction : Bounding
     static member createRandomLayer (height : int) (width : int) =
         let random = System.Random ()
         let randomizedWeightsArray : float32[,] = Array2D.zeroCreate height width |> Array2D.map(fun _ -> random.NextDouble() |> float32 |> (+) -0.5f |> (*) 2.0f) //Want weights between -1 and +1
-        let biasArray = Array.zeroCreate(height) |> Array.map (fun _ -> random.NextDouble() |> float32 |> (+) -0.5f |> (*) 255.0f) //Want biases between -255 and +255
+        let biasArray = Array.zeroCreate(height) |> Array.map (fun _ -> random.NextDouble() |> float32 |> (+) -0.5f |> (*) 1.0f) //Want biases between -1 and +1
         (randomizedWeightsArray, biasArray)
 
 type NeuralNetwork(hiddenLayers : Layer[]) =
@@ -259,6 +259,25 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
     //SGD stands for Stochastic Gradient Descent.  Training data is all the data required for the network, where the first element is the input data in and the second element is the expected output arrangement (probably an array of 0s with 1 1).  That itself is an array.  The learning rate is represented by eta, and is a multiplier to speed up learning.
     static member SGD (trainingData : (float32[] * float32[])[]) (epochs : int) (miniBatchSize : int) (learningRate : float32) (testMode : TestMode) (initialNetwork : NeuralNetwork) =
         let random = System.Random ()
+        let testNeuralNet (neuralNetToTest : NeuralNetwork) =
+                let numCorrectResults = 
+                    trainingData
+                    |> Array.Parallel.map (fun (input, expectedOutput) ->
+                        let currentResults = snd(neuralNetToTest.FeedForward(input))
+                        let findGreatestIteration (inputArray : float32[]) =
+                            let maxValue = inputArray |> Array.max
+                            inputArray |> Array.findIndex(fun v -> v = maxValue)
+                        let mostLikelyResult = findGreatestIteration currentResults
+                        let expectedResult = findGreatestIteration expectedOutput
+                        match (mostLikelyResult = expectedResult) with
+                        | false -> 0
+                        | true -> 1
+                        )
+                    |> Array.sum
+                let numResultsTotal = trainingData |> Array.length
+                let percentCorrect = (float32 numCorrectResults) / (float32 numResultsTotal)
+                printfn "Percent Correct: %f, Num Correct Found: %i, Total Number of Images: %i" percentCorrect numCorrectResults numResultsTotal
+        if (testMode = TestMode.Test) then testNeuralNet initialNetwork
         let rec completeAllEpochs (testMode : TestMode) (currentCount : int) (currentNetwork : NeuralNetwork) =
             match (currentCount < epochs) with
             | false -> currentNetwork
@@ -268,7 +287,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                 let updateOnBatch (learningRate : float32) (currentNeuralNetwork : NeuralNetwork) (trainingData : (float32[] * float32[])[]) =
                     let runBackpropOnBatch = trainingData |> Array.Parallel.map (fun (inputData, expectedResult) -> NeuralNetwork.backprop currentNeuralNetwork inputData expectedResult)
                     let averageResultsForUpdate =
-                        let inverseNumResults = (1 / (runBackpropOnBatch |> Array.length)) |> float32
+                        let inverseNumResults = (1.0f / float32(runBackpropOnBatch |> Array.length))
                         let summedResults =
                             runBackpropOnBatch
                             |> Array.reduce (fun prevDerivArray nextDerivArray ->
@@ -290,23 +309,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                 match testMode with
                 | Production -> completeAllEpochs testMode (currentCount+1) endOfEpochNeuralNet
                 | Test ->
-                    let numCorrectResults = 
-                        trainingData
-                        |> Array.Parallel.map (fun (input, expectedOutput) ->
-                            let currentResults = snd(endOfEpochNeuralNet.FeedForward(input))
-                            let findGreatestIteration (inputArray : float32[]) =
-                                let maxValue = inputArray |> Array.max
-                                inputArray |> Array.findIndex(fun v -> v = maxValue)
-                            let mostLikelyResult = findGreatestIteration currentResults
-                            let expectedResult = findGreatestIteration expectedOutput
-                            match (mostLikelyResult = expectedResult) with
-                            | false -> 0
-                            | true -> 1
-                            )
-                        |> Array.sum
-                    let numResultsTotal = trainingData |> Array.length
-                    let percentCorrect = (float32 numCorrectResults) / (float32 numResultsTotal)
-                    printfn "Percent Correct: %f, Num Correct Found: %i, Total Number of Images: %i" percentCorrect numCorrectResults numResultsTotal
+                    testNeuralNet endOfEpochNeuralNet
                     completeAllEpochs testMode (currentCount+1) endOfEpochNeuralNet
         //In each epoch
         //Shuffle the training data
@@ -398,7 +401,7 @@ module Main =
                 |> Array.unzip
             let boundInputImages = inputImages |> Array.map (Array.map (fun x -> x / 255.0f))
             (boundInputImages, expectedOutputs) ||> Array.zip
-        NeuralNetwork.SGD datafiedImages 150 20 1.0f TestMode.Test neuralNet |> ignore
+        NeuralNetwork.SGD boundTo1DatafiedImages 150 100 2.0f TestMode.Test neuralNet |> ignore
 
         ignore ()
 
