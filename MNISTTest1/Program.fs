@@ -45,8 +45,6 @@ type DigitImage =
         Data: byte[,]
     }
 
-
-
 type BoundingFunction =
     | ReLu //Rectified Linear Unit
     | Sigmoid
@@ -194,8 +192,10 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                 let finalResult = resultVector |> MachineLearningHelpers.SigmoidArray
                 (finalResult, finalResult)
         //The Result in this case is the mapping of all layers to their activated layer form (That is, it transforms each element in the array into what that layer's final activations looked like.)   The final state is the end result of the network propogation.
-        (inputVector, hiddenLayers)
-        ||> Array.mapFold feedOneLayer
+        let activations, finalResult =
+            (inputVector, hiddenLayers)
+            ||> Array.mapFold feedOneLayer
+        (Array.append (Array.singleton inputVector) activations), finalResult //The input vector is the activation of the 0th layer, in essence.  We need to append it back on.
     //Creates a randomized neural network when it knows how many nodes are in layer 0 and then a count of the nodes in the following layers. Layer 0 is updated only at runtime with new input information.
     static member createRandomizedNeuralNetwork (initialLayerHeight : int) (sizeOfEachLayer : int[]) : NeuralNetwork =
         let firstLayerSize = sizeOfEachLayer |> Array.head
@@ -222,7 +222,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
         let (activations, finalState) = inputData |> NeuralNetwork.feedForward inputNetwork
         let finalArrayLength = Array.length finalState //Precalculated for performance reasons.
         if (finalArrayLength <> (Array.length expectedResult)) then raise (System.ArgumentException("Output and Expected Result lengths did not match during backpropagation."))
-        let errorFunction (inputResult : float32) (expectedResult : float32) = (inputResult - expectedResult) ** 2.0f
+        let errorFunction (inputResult : float32) (expectedResult : float32) = (expectedResult - inputResult)// ** 2.0f //Exponential is not necessary since this is the derivative.
         let finalLayerError = (finalState, expectedResult) ||> Array.map2 errorFunction
         //Note that all activation functions we are using have derivatives that can be defined in terms of the original activation function, not just in terms of the variable which went into the activation function.
         //We will be using that so that we do not have to store the data on the inputs of the activation function.
@@ -230,31 +230,31 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
             match boundingFunction with
             | ReLu -> MachineLearningHelpers.ReLu'
             | Sigmoid -> MachineLearningHelpers.Sigmoid'FromSigmoid
-        let finalStateDerivatives = finalState |> Array.map ((inputNetwork.Network |> Array.last).BoundingFunction |> activationFunctionDerivativeToUseBasedOnActivatedNeuron)
-        //Delta is the chain ruled derivatives of everything to get to the next layer, except the weights.  It can be represented as an array, and multiplied piece-by-piece with the activations to get the change in cost related to weights (since this is everything except the weights).
-        //Delta of the final layer includes all the error terms being summed up into the cost function, so we include that here before the recursive function.
-        let deltaFinalLayer =
-            finalLayerError
-            |> Array.map (fun element -> element * (1.0f / (float32 finalArrayLength))) //Scaling on all the elements, since they are summed into the cost function
-            |> Array.mapi (fun iter element -> (Array.get finalStateDerivatives iter) * element) //This multiplies all elements by the derivative of the activation function.  This is again a chain rule extension.  We now have dCost / dActivation * dActivation / dPreActivation (when weights are multiplied by activations from the previous layer).
-
-        let layerBeforeLast =
-            let length = activations |> Array.length
-            Array.get activations (length - 1)
-        let dCostWithRespectTodWeights = ArrayOperations.DotProduct2D (deltaFinalLayer |> ArrayOperations.Turn1DArrayInto2DHorizontal) (layerBeforeLast |> ArrayOperations.Turn1DArrayInto2DVertical) //This is the derivatives of everything going into the final layer, and we will need to subtract this from the final layer's weights.
-        let rec backpropOfOtherLayers (currentLayer : int) (currentWeightAndBiasDerivatives : (float32[,] * float32[])[]) (previousLayerDelta : float32[,]) (neuralNetworkStructure : NeuralNetwork) (activationsOfAllLayers : float32[][]) =
+        let finalLayerActivationFunction = (inputNetwork.Network |> Array.last).BoundingFunction |> activationFunctionDerivativeToUseBasedOnActivatedNeuron
+        let finalLayerPreDeltas = finalLayerError |> Array.map (fun e -> e * (1.0f / (float32 finalArrayLength))) //Perform scaling of the errors on all array elements
+        let finalLayerActivationDerivatives = finalState |> Array.map finalLayerActivationFunction //Get all the derivatives of the activation functions
+        let finalLayerDeltas = (finalLayerActivationDerivatives, finalLayerPreDeltas) ||> Array.map2 (*) //Multiply the two together.  This is the delta of the Final Layer, due to chain rule.  Delta is not a derivative, it's just a precalculated constant.
+        let derivativeWeightMatrix = ArrayOperations.DotProduct2D (finalLayerDeltas |> ArrayOperations.Turn1DArrayInto2DVertical) ((activations[activations.Length-2]) |> ArrayOperations.Turn1DArrayInto2DHorizontal) //When a vertical delta matrix is multiplied by the inputs from the previous layer, we get the matrix which tells us how to adjust weights.
+        let derivativeBiasMatrix = finalLayerDeltas //The bias matrix is the weight matrix without dot multiplying the activations.  This is just the deltas.
+        //Now we have all the information for the final layer of derivatives and deltas.
+        
+        let rec backpropOfOtherLayers (currentLayer : int) (currentWeightAndBiasDerivatives : (float32[,] * float32[])[]) (previousLayerDelta : float32[]) (neuralNetworkStructure : NeuralNetwork) (activationsOfAllLayers : float32[][]) =
             match currentLayer with
-            | 0 -> currentWeightAndBiasDerivatives |> Array.rev
+            | currentLayer when currentLayer <= 0 -> currentWeightAndBiasDerivatives |> Array.rev
             | _ ->
-                let activationFunctionOfLayer = activationFunctionDerivativeToUseBasedOnActivatedNeuron neuralNetworkStructure.Network[currentLayer].BoundingFunction
-                let thisLayersActivations = currentLayer |> Array.get activationsOfAllLayers |> ArrayOperations.Turn1DArrayInto2DVertical
-                let preDeltaComputation = ArrayOperations.DotProduct2D (previousLayerDelta) (neuralNetworkStructure.Network[currentLayer].Weights)
-                let deltaThisLayer = ArrayOperations.DotProduct2D preDeltaComputation (thisLayersActivations |> Array2D.map activationFunctionOfLayer)
-                let dCostWithRespectTodWeights = ArrayOperations.DotProduct2D (deltaThisLayer |> ArrayOperations.Transpose) thisLayersActivations
-                let thisLayerWeightAndBiasDerivatives =  ((dCostWithRespectTodWeights, deltaThisLayer[*, 0]) |> Array.singleton)
-                let newWeightAndBiasDerivatives = Array.append thisLayerWeightAndBiasDerivatives currentWeightAndBiasDerivatives
-                backpropOfOtherLayers (currentLayer - 1) (newWeightAndBiasDerivatives) (deltaThisLayer) (neuralNetworkStructure) (activationsOfAllLayers)
-        backpropOfOtherLayers (inputNetwork.Network |> Array.length |> (+) -1) (Array.zip (dCostWithRespectTodWeights |> Array.singleton) (deltaFinalLayer |> Array.singleton)) (deltaFinalLayer |> ArrayOperations.Turn1DArrayInto2DVertical) (inputNetwork) activations
+                let activationFunctionOfLayer = activationFunctionDerivativeToUseBasedOnActivatedNeuron neuralNetworkStructure.Network[currentLayer-1].BoundingFunction
+                let lastLayersActivations = (currentLayer) |> Array.get activationsOfAllLayers
+                let thisLayersActivations = (currentLayer - 1) |> Array.get activationsOfAllLayers
+                let preDeltaComputation2D = ArrayOperations.DotProduct2D (previousLayerDelta |> ArrayOperations.Turn1DArrayInto2DHorizontal) (neuralNetworkStructure.Network[currentLayer].Weights) //Dot multiply horizontal deltas from last layer by weight matrix (also from last last layer, because the weights and deltas mixed to become our new delta terms) to get horizontal preDeltas
+                let preDeltaComputation = preDeltaComputation2D[0,*]
+                let deltaThisLayer = (preDeltaComputation, (lastLayersActivations |> Array.map activationFunctionOfLayer)) ||> Array.map2 (*) //Multiply that horizontal array piecewise with the derivatives of the activation function to get the new deltas.
+                let dCostWithRespectTodWeights = ArrayOperations.DotProduct2D (deltaThisLayer |> ArrayOperations.Turn1DArrayInto2DVertical) (thisLayersActivations |> ArrayOperations.Turn1DArrayInto2DHorizontal)
+                let dCostWithRespectTodBiases = deltaThisLayer //Once again biases are equivalent to deltas
+                let thisLayerWeightAndBiasDerivatives =  ((dCostWithRespectTodWeights, dCostWithRespectTodBiases) |> Array.singleton)
+                let newWeightAndBiasDerivatives = Array.append currentWeightAndBiasDerivatives thisLayerWeightAndBiasDerivatives
+                backpropOfOtherLayers (currentLayer-1) (newWeightAndBiasDerivatives) (deltaThisLayer) (neuralNetworkStructure) (activationsOfAllLayers)
+        backpropOfOtherLayers (inputNetwork.Network |> Array.length |> (+) -1) (Array.zip (derivativeWeightMatrix |> Array.singleton) (derivativeBiasMatrix |> Array.singleton)) (finalLayerDeltas) (inputNetwork) activations
+        //Note that the final layer deltas are turned horizontal.  The previous layer's deltas are horizontal and multiplied by the weights of the current layer and also multiplied by the derivatives of the activation functions piecewise to get this layer's deltas, horizontal.
 
     //SGD stands for Stochastic Gradient Descent.  Training data is all the data required for the network, where the first element is the input data in and the second element is the expected output arrangement (probably an array of 0s with 1 1).  That itself is an array.  The learning rate is represented by eta, and is a multiplier to speed up learning.
     static member SGD (trainingData : (float32[] * float32[])[]) (epochs : int) (miniBatchSize : int) (learningRate : float32) (testMode : TestMode) (initialNetwork : NeuralNetwork) =
@@ -272,7 +272,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                         let summedResults =
                             runBackpropOnBatch
                             |> Array.reduce (fun prevDerivArray nextDerivArray ->
-                                (prevDerivArray, nextDerivArray) 
+                                (prevDerivArray, nextDerivArray)
                                 ||> Array.map2 (fun (prevWeights, prevBiases) (nextWeights, nextBiases) -> ((ArrayOperations.ArrayAdd2D prevWeights nextWeights), ((prevBiases, nextBiases) ||> Array.map2 (fun prev next -> prev + next)))))
                         summedResults |> Array.map (fun (weights, biases) -> ((weights |> Array2D.map (fun e -> e * inverseNumResults * learningRate)), biases |> Array.map (fun e -> e * inverseNumResults * learningRate)))
                     //Remember to SUBTRACT the derivatives away from the weights to reduce the cost function
@@ -292,7 +292,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                 | Test ->
                     let numCorrectResults = 
                         trainingData
-                        |> Array.map (fun (input, expectedOutput) ->
+                        |> Array.Parallel.map (fun (input, expectedOutput) ->
                             let currentResults = snd(endOfEpochNeuralNet.FeedForward(input))
                             let findGreatestIteration (inputArray : float32[]) =
                                 let maxValue = inputArray |> Array.max
@@ -392,6 +392,12 @@ module Main =
 
         //Back to image net
         let datafiedImages = goodImages |> Array.map DigitImage.ConvertDigitImageToFloats
+        let boundTo1DatafiedImages =
+            let (inputImages, expectedOutputs) =
+                datafiedImages
+                |> Array.unzip
+            let boundInputImages = inputImages |> Array.map (Array.map (fun x -> x / 255.0f))
+            (boundInputImages, expectedOutputs) ||> Array.zip
         NeuralNetwork.SGD datafiedImages 150 20 1.0f TestMode.Test neuralNet |> ignore
 
         ignore ()
