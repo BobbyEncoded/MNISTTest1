@@ -373,8 +373,10 @@ module Main =
             printfn "Label: %u" firstImage.Label
             firstImage.Data
         
+        let pictureDirectory = System.Environment.GetFolderPath System.Environment.SpecialFolder.MyPictures
+        let imageSavingDirectory = System.IO.Directory.CreateDirectory(Path.Combine(pictureDirectory, "MNIST Bitmaps"))
         image
-        |> MNIST.createImageFromData @"C:\Users\bobma\Pictures\MNIST Bitmaps\image.bmp"
+        |> MNIST.createImageFromData (Path.Combine(imageSavingDirectory.FullName, "image.bmp"))
         |> ignore
 
         let goodImages =
