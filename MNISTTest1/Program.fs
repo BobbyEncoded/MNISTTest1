@@ -1,5 +1,12 @@
 ﻿open System.IO
 
+module Random =
+    let gaussianRandomNumber (rand : System.Random) mean stdDev =
+        let u1 = 1.0-rand.NextDouble() //uniform(0,1] random doubles
+        let u2 = 1.0-rand.NextDouble()
+        let randStdNormal = System.Math.Sqrt(-2.0 * System.Math.Log(u1)) * System.Math.Sin(2.0 * System.Math.PI * u2) //random normal(0,1)
+        mean + stdDev * randStdNormal //random normal(mean,stdDev^2)
+
 module ArrayOperations =
     let multiply2DArrayByScalar (inputArray : float32[,]) (scale : float32) = Array2D.map (fun e -> e * scale) inputArray
     let Transpose (inputArray : 'T[,]) = Array2D.init (Array2D.length2 inputArray) (Array2D.length1 inputArray) (fun row col -> (col, row) ||> Array2D.get inputArray)
@@ -149,8 +156,8 @@ type Layer(weights : float32[,], biases : float32[], boundingFunction : Bounding
     member this.BoundingFunction = boundingFunction
     static member createRandomLayer (height : int) (width : int) =
         let random = System.Random ()
-        let randomizedWeightsArray : float32[,] = Array2D.zeroCreate height width |> Array2D.map(fun _ -> random.NextDouble() |> float32 |> (+) -0.5f |> (*) 2.0f) //Want weights between -1 and +1
-        let biasArray = Array.zeroCreate(height) |> Array.map (fun _ -> random.NextDouble() |> float32 |> (+) -0.5f |> (*) 1.0f) //Want biases between -1 and +1
+        let randomizedWeightsArray : float32[,] = Array2D.zeroCreate height width |> Array2D.map(fun _ -> Random.gaussianRandomNumber random 0.0 1.0 |> float32) //Want weights between -1 and +1
+        let biasArray = Array.zeroCreate(height) |> Array.map (fun _ -> Random.gaussianRandomNumber random 0.0 1.0 |> float32) //Want biases between -1 and +1
         (randomizedWeightsArray, biasArray)
 
 type NeuralNetwork(hiddenLayers : Layer[]) =
@@ -293,7 +300,7 @@ type NeuralNetwork(hiddenLayers : Layer[]) =
                             |> Array.reduce (fun prevDerivArray nextDerivArray ->
                                 (prevDerivArray, nextDerivArray)
                                 ||> Array.map2 (fun (prevWeights, prevBiases) (nextWeights, nextBiases) -> ((ArrayOperations.ArrayAdd2D prevWeights nextWeights), ((prevBiases, nextBiases) ||> Array.map2 (fun prev next -> prev + next)))))
-                        summedResults |> Array.map (fun (weights, biases) -> ((weights |> Array2D.map (fun e -> e * inverseNumResults * learningRate)), biases |> Array.map (fun e -> e * inverseNumResults * learningRate)))
+                        summedResults |> Array.Parallel.map (fun (weights, biases) -> ((weights |> Array2D.map (fun e -> e * inverseNumResults * learningRate)), biases |> Array.map (fun e -> e * inverseNumResults * learningRate)))
                     //Remember to SUBTRACT the derivatives away from the weights to reduce the cost function
                     let updatedHiddenLayers = 
                         let (oldWeights, oldBiases) = currentNeuralNetwork.Network |> Array.map (fun e -> (e.Weights, e.Biases)) |> Array.unzip
@@ -348,8 +355,15 @@ module Main =
         let (%*) = ArrayOperations.DotProduct2D
         let (@+) (array1 : float[]) (array2 : float[]) = (array1, array2) ||> Array.map2 (fun a b -> a + b)
 
-        let testImages = MNIST.CollectImages @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-test-images-idx3-ubyte.bin" @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-test-labels-idx1-ubyte.bin"
-        let trainImages = MNIST.CollectImages @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-train-images-idx3-ubyte.bin" @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-train-labels-idx1-ubyte.bin"
+        let downloadsFolder = Path.Combine(System.Environment.GetFolderPath System.Environment.SpecialFolder.UserProfile, "Downloads")
+        let testImageLocation = Path.Combine(downloadsFolder, "MNIST\gzip\emnist-mnist-test-images-idx3-ubyte.bin")
+        let testLabelLocation = Path.Combine(downloadsFolder, "MNIST\gzip\emnist-mnist-test-labels-idx1-ubyte.bin")
+        let trainImageLocation = Path.Combine(downloadsFolder, "MNIST\gzip\emnist-mnist-train-images-idx3-ubyte.bin")
+        let trainLabelLocation = Path.Combine(downloadsFolder, "MNIST\gzip\emnist-mnist-train-labels-idx1-ubyte.bin")
+        //let testImages = MNIST.CollectImages @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-test-images-idx3-ubyte.bin" @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-test-labels-idx1-ubyte.bin"
+        //let trainImages = MNIST.CollectImages @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-train-images-idx3-ubyte.bin" @"C:\Users\bobma\Downloads\MNIST\gzip\emnist-mnist-train-labels-idx1-ubyte.bin"
+        let testImages = MNIST.CollectImages testImageLocation testLabelLocation
+        let trainImages = MNIST.CollectImages trainImageLocation trainLabelLocation
 
         let image =
             let firstImage : DigitImage =
@@ -395,7 +409,7 @@ module Main =
         //Backprop should have a matrix of the final layer being some arrangement of 0.056, 0.02358, -0.05536, and -0.0233116/
         //The next layer should include a delta value os -0.1617915 and a derivative of -0.0697166
 
-        let neuralNet = NeuralNetwork.createRandomizedNeuralNetwork initialLayerHeight [|30; 10|] //This is made from the images
+        let neuralNet = NeuralNetwork.createRandomizedNeuralNetwork initialLayerHeight [|20; 20; 10|] //This is made from the images
 
         //Performing some tests
         let newMatrix =
@@ -413,14 +427,14 @@ module Main =
 
         //Back to image net
         let datafiedImages = goodImages |> Array.map DigitImage.ConvertDigitImageToFloats
-        let boundTo1DatafiedImages =
+        let boundTo1DatafiedImages = //This will make all the pixels range from 0 -> 1 instead of 0 -> 255
             let (inputImages, expectedOutputs) =
                 datafiedImages
                 |> Array.unzip
             let boundInputImages = inputImages |> Array.map (Array.map (fun x -> x / 255.0f))
             (boundInputImages, expectedOutputs) ||> Array.zip
-        NeuralNetwork.SGD boundTo1DatafiedImages 30 20 1.0f TestMode.Test neuralNet |> ignore
+        NeuralNetwork.SGD boundTo1DatafiedImages 100 20 0.5f TestMode.Test neuralNet |> ignore
 
-        ignore ()
+        System.Console.ReadLine () |> ignore
 
         0
